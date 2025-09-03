@@ -6,9 +6,9 @@ This GitHub Action runs daily at 9:00 AM EST to fetch critical, high, and medium
 
 - **Daily Automated Reports**: Runs every day at 9:00 AM EST
 - **Issue Severity Tracking**: Fetches critical, high, and medium severity issues
-- **Slack Notifications**: Sends formatted reports to your Slack channel
+- **Slack Notifications**: Sends formatted reports to your Slack channel with service names
 - **Project Grouping**: Organizes issues by application/project name
-- **Rich Formatting**: Color-coded Slack messages with issue counts
+- **Rich Formatting**: Color-coded Slack messages with issue counts and affected services
 
 ## Prerequisites
 
@@ -57,6 +57,24 @@ Add these secrets:
 - `SLACK_BOT_TOKEN`: Your Slack bot token
 - `SLACK_CHANNEL`: Channel name (e.g., `security-alerts`) or ID
 
+## Repository Structure
+
+Organize your files like this:
+
+```
+your-repo/
+├── .github/
+│   └── workflows/
+│       └── daily-snyk-report.yml
+├── scripts/
+│   ├── security/
+│   │   ├── snyk-report.py
+│   │   ├── requirements.txt (optional)
+│   │   └── README.md (optional)
+│   └── other-scripts/
+└── README.md
+```
+
 ### 2. Create Workflow File
 
 Create `.github/workflows/daily-snyk-report.yml`:
@@ -98,22 +116,12 @@ jobs:
           SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          python snyk-report.py
-
-      - name: Upload report artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: snyk-report-${{ github.run_number }}
-          path: |
-            snyk-report.json
-            snyk-report.md
-          retention-days: 7
+          python scripts/security/snyk-report.py
 ```
 
 ### 3. Create Python Script
 
-Create `snyk-report.py` in your repository root:
+Create `scripts/security/snyk-report.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -375,7 +383,42 @@ class SnykSecurityReporter:
             }
         ]
         
-        # Add projects with issues (top 10)
+        # Add critical and high severity services breakdown
+        critical_projects = [p for p in report['projects'] if p['critical'] > 0]
+        high_projects = [p for p in report['projects'] if p['high'] > 0 and p['critical'] == 0]
+        
+        if critical_projects or high_projects:
+            severity_breakdown = ""
+            
+            # Critical services
+            if critical_projects:
+                critical_names = [p['name'] for p in critical_projects]
+                if len(critical_names) <= 3:
+                    critical_text = ", ".join(critical_names)
+                else:
+                    critical_text = f"{', '.join(critical_names[:3])} ... <https://app.snyk.io/org/{self.org_id}|click here for more>"
+                
+                severity_breakdown += f"🔴 *Critical Issues in:*\n{critical_text}\n\n"
+            
+            # High severity services  
+            if high_projects:
+                high_names = [p['name'] for p in high_projects]
+                if len(high_names) <= 3:
+                    high_text = ", ".join(high_names)
+                else:
+                    high_text = f"{', '.join(high_names[:3])} ... <https://app.snyk.io/org/{self.org_id}|click here for more>"
+                
+                severity_breakdown += f"🟠 *High Issues in:*\n{high_text}"
+            
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": severity_breakdown.strip()
+                }
+            })
+        
+        # Add detailed projects breakdown (top 10)
         if report['projects']:
             project_text = ""
             for i, project in enumerate(report['projects'][:10], 1):
@@ -398,7 +441,7 @@ class SnykSecurityReporter:
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*Top Projects with Issues:*\n{project_text}"
+                    "text": f"*Detailed Project Breakdown:*\n{project_text}"
                 }
             })
         
@@ -463,47 +506,6 @@ class SnykSecurityReporter:
         except Exception as e:
             print(f"❌ Unexpected error sending Slack notification: {e}")
             return False
-
-    def save_reports(self, report: Dict):
-        """Save JSON and Markdown reports"""
-        # Save JSON report
-        with open('snyk-report.json', 'w') as f:
-            json.dump(report, f, indent=2)
-        print("✅ JSON report saved: snyk-report.json")
-        
-        # Generate and save Markdown report
-        markdown = self.generate_markdown_report(report)
-        with open('snyk-report.md', 'w') as f:
-            f.write(markdown)
-        print("✅ Markdown report saved: snyk-report.md")
-
-    def generate_markdown_report(self, report: Dict) -> str:
-        """Generate Markdown report"""
-        summary = report['summary']
-        
-        markdown = "# Daily Snyk Security Report\n\n"
-        markdown += f"**Generated:** {datetime.now().strftime('%Y-%m-%d %I:%M %p EST')}\n"
-        markdown += f"**Organization ID:** {report['organization_id']}\n\n"
-        
-        markdown += "## Summary\n\n"
-        markdown += f"- **Projects Scanned:** {summary['total_projects']}\n"
-        markdown += f"- **Projects with Issues:** {summary['projects_with_issues']}\n"
-        markdown += f"- **Critical Issues:** {summary['total_critical']}\n"
-        markdown += f"- **High Issues:** {summary['total_high']}\n"
-        markdown += f"- **Medium Issues:** {summary['total_medium']}\n"
-        markdown += f"- **Total Issues:** {summary['total_issues']}\n\n"
-        
-        if not report['projects']:
-            markdown += "## Results\n\n🎉 **No security issues found!**\n"
-        else:
-            markdown += "## Projects with Issues\n\n"
-            markdown += "| Project | Critical | High | Medium | Total |\n"
-            markdown += "|---------|----------|------|--------|-------|\n"
-            
-            for project in report['projects']:
-                markdown += f"| {project['name']} | {project['critical']} | {project['high']} | {project['medium']} | {project['total']} |\n"
-        
-        return markdown
 
     def print_summary(self, report: Dict):
         """Print summary to console"""
@@ -587,6 +589,77 @@ if __name__ == "__main__":
     reporter.run()
 ```
 
+### 4. Optional: Add Requirements File
+
+Create `scripts/security/requirements.txt` for better dependency management:
+
+```txt
+requests>=2.31.0
+slack-sdk>=3.19.0
+```
+
+Then update your workflow to use it:
+
+```yaml
+      - name: Install dependencies
+        run: |
+          pip install -r scripts/security/requirements.txt
+```
+
+### 5. Optional: Add Documentation
+
+Create `scripts/security/README.md` to document your security scripts:
+
+```markdown
+# Security Scripts
+
+## Daily Snyk Report
+- **File**: `snyk-report.py`
+- **Purpose**: Daily security vulnerability reporting
+- **Schedule**: 9:00 AM EST daily
+- **Output**: Slack notifications
+
+## Future Scripts
+- Add other security automation scripts here
+```
+
+## Alternative Directory Structures
+
+You can organize it however makes sense for your team:
+
+### Option 1: By Tool
+```
+scripts/
+├── snyk/
+│   ├── daily-report.py
+│   └── vulnerability-scanner.py
+├── sonarqube/
+│   └── code-quality-report.py
+└── dependabot/
+    └── dependency-report.py
+```
+
+### Option 2: By Function  
+```
+scripts/
+├── reporting/
+│   ├── security-report.py
+│   └── performance-report.py
+├── monitoring/
+│   └── health-check.py
+└── deployment/
+    └── deploy-helper.py
+```
+
+### Option 3: Flat Structure
+```
+scripts/
+├── snyk-daily-report.py
+├── security-scan.py
+├── performance-monitor.py
+└── requirements.txt
+```
+
 ## Configuration
 
 ### Environment Variables
@@ -597,6 +670,7 @@ if __name__ == "__main__":
 | `SNYK_ORG_ID` | Your Snyk organization ID | Yes | `4a18d42f-0706-4ad0-b127-24078731fbed` |
 | `SLACK_BOT_TOKEN` | Slack bot token | Yes | `xoxb-123...` |
 | `SLACK_CHANNEL` | Slack channel name or ID | Yes | `security-alerts` |
+| `GITHUB_REPOSITORY` | GitHub repo (auto-populated) | Auto | `owner/repo-name` |
 
 ### Timezone Configuration
 
@@ -606,26 +680,56 @@ The workflow is set to run at 9:00 AM EST:
 
 Update the cron schedule in the workflow file if needed.
 
-## Sample Output
+### Slack Channel Configuration
 
-### Slack Message
-- 🚨 **Header**: "Daily Snyk Security Report"
-- 📊 **Summary**: Project counts and issue totals
-- 🎯 **Top Projects**: List of projects with most issues
-- 🔗 **Action Buttons**: Links to Snyk dashboard and GitHub
+You can specify the Slack channel in several ways:
 
-### Console Output
+1. **Channel Name**: Use the channel name (e.g., `security-alerts`)
+2. **Channel ID**: Use the channel ID (e.g., `C1234567890`) - more reliable
+3. **Private Channels**: Bot must be invited to private channels first
+4. **Direct Messages**: Use a user ID to send DMs (e.g., `U1234567890`)
+
+To find a channel ID:
+- Right-click on the channel in Slack → **Copy Link**
+- The ID is the last part: `https://yourworkspace.slack.com/archives/C1234567890`
+
+## Sample Slack Message Output
+
+The Slack message will include:
+
+### Header Section
 ```
-📊 DAILY SNYK SECURITY REPORT SUMMARY
-======================================================================
-📅 Generated: 2025-09-02 09:00 AM EST
-🏢 Organization: your-org-id
-📋 Projects Scanned: 25
-⚠️  Projects with Issues: 8
-🔴 Critical Issues: 3
-🟠 High Issues: 12
-🟡 Medium Issues: 24
-📊 Total Issues: 39
+🚨 Daily Snyk Security Report
+Status: CRITICAL SECURITY ISSUES DETECTED
+Report Time: 2025-09-02 09:00 AM EST
+Projects Scanned: 25
+Projects with Issues: 8
+```
+
+### Issue Summary
+```
+🔴 Critical: 3
+🟠 High: 12  
+🟡 Medium: 24
+📊 Total: 39
+```
+
+### Service Names for Critical & High
+```
+🔴 Critical Issues in:
+user-service, payment-api, auth-service ... click here for more
+
+🟠 High Issues in:  
+web-frontend, mobile-app, data-processor ... click here for more
+```
+
+### Detailed Breakdown
+```
+1. 🔴🟠 user-service
+   Critical: 2, High: 4, Medium: 1
+
+2. 🔴🟠 payment-api  
+   Critical: 1, High: 3, Medium: 2
 ```
 
 ## Manual Testing
@@ -649,12 +753,57 @@ Test the workflow manually:
    - Verify `SLACK_BOT_TOKEN` starts with `xoxb-`
    - Check bot has `chat:write` permission
 
-3. **No Issues Found**
+3. **Script Path Issues**
+   - Verify the script is in `scripts/security/snyk-report.py`
+   - Check the workflow uses the correct path
+   - Ensure the file is executable (shouldn't matter in CI, but good practice)
+
+4. **No Issues Found**
    - This is normal if no critical/high/medium issues exist
    - Verify projects have been scanned in Snyk recently
 
-4. **Timezone Issues**
+5. **Timezone Issues**
    - GitHub Actions runs on UTC
    - Adjust cron schedule for EST/EDT as needed
 
-That's it! This workflow will run daily at 9 AM EST, fetch your Snyk security issues, and send a formatted report to Slack.
+### Testing Slack Integration
+
+Test your Slack bot setup with a simple Python script:
+
+```python
+from slack_sdk import WebClient
+
+client = WebClient(token="your-bot-token")
+response = client.chat_postMessage(
+    channel="your-channel",
+    text="Test message from Snyk bot!"
+)
+print(f"Message sent: {response['ok']}")
+```
+
+## API Reference
+
+This action uses the Snyk REST API with the following endpoints:
+
+- `GET /rest/orgs/{org_id}/projects` - List all projects
+- `GET /rest/orgs/{org_id}/issues` - Get issues with severity filtering
+
+For complete API documentation, visit: https://docs.snyk.io/snyk-api/reference
+
+## Security Considerations
+
+- **Token Storage**: Always store tokens as GitHub secrets
+- **Token Permissions**: Use the principle of least privilege
+- **Service Accounts**: Prefer service accounts over personal tokens for automation
+- **Token Rotation**: Regularly rotate your API tokens
+
+## Support
+
+For issues related to:
+- **Snyk API**: Contact [Snyk Support](https://support.snyk.io)
+- **GitHub Actions**: Check the [GitHub Actions documentation](https://docs.github.com/en/actions)
+- **Slack API**: Visit [Slack API documentation](https://api.slack.com/)
+
+---
+
+**Note**: This action requires a Snyk account with API access. Free and Team plans have limited API functionality compared to Enterprise plans.
