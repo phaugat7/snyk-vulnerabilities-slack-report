@@ -522,6 +522,28 @@ class SnykSecurityReporter:
         print(f"📊 Total Issues: {summary['total_issues']}")
         
         if report['projects']:
+            print(f"\n🔴 CRITICAL ISSUES:")
+            critical_projects = [p for p in report['projects'] if p['critical'] > 0]
+            if critical_projects:
+                critical_names = [p['name'] for p in critical_projects]
+                if len(critical_names) <= 3:
+                    print(f"   Services: {', '.join(critical_names)}")
+                else:
+                    print(f"   Services: {', '.join(critical_names[:3])} ... and {len(critical_names) - 3} more")
+            else:
+                print("   No critical issues found")
+            
+            print(f"\n🟠 HIGH ISSUES:")
+            high_projects = [p for p in report['projects'] if p['high'] > 0]
+            if high_projects:
+                high_names = [p['name'] for p in high_projects]
+                if len(high_names) <= 3:
+                    print(f"   Services: {', '.join(high_names)}")
+                else:
+                    print(f"   Services: {', '.join(high_names[:3])} ... and {len(high_names) - 3} more")
+            else:
+                print("   No high issues found")
+                
             print(f"\n🎯 TOP 5 PROJECTS WITH ISSUES:")
             for i, project in enumerate(report['projects'][:5], 1):
                 indicators = []
@@ -545,16 +567,16 @@ class SnykSecurityReporter:
             # Generate security report
             report = self.process_security_data()
             
-            # Save reports to files
-            self.save_reports(report)
-            
             # Send Slack notification
-            self.send_slack_notification(report)
+            slack_sent = self.send_slack_notification(report)
             
             # Print console summary
             self.print_summary(report)
             
-            print("\n✅ Daily security report completed successfully!")
+            if slack_sent:
+                print("\n✅ Daily security report sent to Slack successfully!")
+            else:
+                print("\n⚠️ Daily security report completed, but Slack notification failed!")
             
         except Exception as e:
             print(f"\n❌ Report generation failed: {e}")
